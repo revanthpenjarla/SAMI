@@ -83,15 +83,15 @@ This starts:
 ### Backend
 ```bash
 cd backend
-pip install -r requirements.txt
+uv pip install -r requirements.txt
 python -m uvicorn main:app --reload --port 8000
 ```
 
 ### Frontend
 ```bash
 cd frontend
-npm install
-npm run dev
+bun install
+bun run dev
 ```
 
 ### Ollama

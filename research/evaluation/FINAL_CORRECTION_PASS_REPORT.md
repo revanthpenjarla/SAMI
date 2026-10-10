@@ -156,7 +156,7 @@ Created `research/evaluation/confidence_methodology.md` with detailed methodolog
 **Total: 95 passed, 0 failed, 0 skipped**
 
 ### Frontend Build
-- Command: `npm run build`
+- Command: `bun run build`
 - Status: Successful
 - Build time: 26.40s
 - Output: 438.36 kB (133.31 kB gzipped)
@@ -216,7 +216,7 @@ python -m pytest tests/test_pipeline.py -v --tb=short
 #### Frontend Build
 ```bash
 cd frontend
-npm run build
+bun run build
 ```
 
 ---

@@ -25,7 +25,7 @@ try:
     from web3.exceptions import TransactionNotFound, ContractLogicError
 except ImportError:
     print("ERROR: web3.py is not installed.")
-    print("Install it with: pip install web3")
+    print("Install it with: uv pip install web3")
     sys.exit(1)
 
 

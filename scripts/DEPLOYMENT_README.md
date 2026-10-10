@@ -6,7 +6,7 @@ This guide explains how to safely deploy the AuditRegistry smart contract to the
 
 1. **Install web3.py** (if not already installed):
    ```bash
-   pip install web3
+   uv pip install web3
    ```
 
 2. **Obtain Sepolia testnet ETH**:
@@ -96,7 +96,7 @@ export AUDIT_REGISTRY_PRIVATE_KEY=your_private_key_here  # For backend transacti
 
 ### "web3.py is not installed"
 ```bash
-pip install web3
+uv pip install web3
 ```
 
 ### "SEPOLIA_RPC_URL environment variable is not set"

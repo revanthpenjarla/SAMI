@@ -16,3 +16,4 @@ scikit-learn>=1.4.0
 email-validator>=2.1.0
 py-solc-x>=2.0.0
 
+hf_transfer

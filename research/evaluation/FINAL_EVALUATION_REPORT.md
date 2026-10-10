@@ -571,7 +571,7 @@ python -m venv venv
 source venv/bin/activate  # On Windows: venv\Scripts\activate
 
 # Install dependencies
-pip install -r backend/requirements.txt
+uv pip install -r backend/requirements.txt
 ```
 
 ### Install Ollama
@@ -601,8 +601,8 @@ python scripts/run_evaluation.py
 ### Build Frontend
 ```bash
 cd frontend
-npm install
-npm run build
+bun install
+bun run build
 ```
 
 ### Docker Deployment (Optional)

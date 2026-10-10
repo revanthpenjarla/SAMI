@@ -16,6 +16,7 @@ COPY backend/ backend/
 
 # Set Python path so imports work correctly
 ENV PYTHONPATH=/app
+ENV HF_HUB_ENABLE_HF_TRANSFER=1
 
 # Expose port
 EXPOSE 8000
