@@ -1,5 +1,7 @@
 import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '@/context/AuthContext';
+import { Button } from '@/components/ui/Button';
+import { Badge } from '@/components/ui/Badge';
 
 export default function Navbar() {
   const { user, logout, isAdmin } = useAuth();
@@ -29,15 +31,14 @@ export default function Navbar() {
       </div>
       <div className="flex items-center gap-4">
         <div className="flex items-center gap-2">
-          <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${isAdmin ? 'bg-purple-900/60 text-purple-300 border border-purple-700' : 'bg-blue-900/60 text-blue-300 border border-blue-700'}`}>
+          <Badge variant={isAdmin ? "secondary" : "default"} className={isAdmin ? 'bg-purple-900/60 text-purple-300 border border-purple-700' : 'bg-blue-900/60 text-blue-300 border border-blue-700'}>
             {user?.role}
-          </span>
+          </Badge>
           <span className="text-gray-400 text-sm">{user?.email}</span>
         </div>
-        <button onClick={handleLogout}
-          className="text-gray-400 hover:text-white text-sm transition-colors">
+        <Button variant="ghost" size="sm" onClick={handleLogout} className="text-gray-400 hover:text-white transition-colors">
           Logout
-        </button>
+        </Button>
       </div>
     </nav>
   );

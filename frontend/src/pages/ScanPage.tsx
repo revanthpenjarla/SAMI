@@ -1,3 +1,4 @@
+import { Button } from '@/components/ui/Button';
 import { useState, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Editor, { OnMount } from '@monaco-editor/react';
@@ -190,16 +191,16 @@ contract ReentrancyVault {
           {/* Top Actions Toolbar */}
           <div className="flex items-center justify-between p-4 border-b border-gray-800 bg-gray-900/80">
             <div className="flex gap-3">
-              <button onClick={handleClear} disabled={loading} className="text-sm px-4 py-2 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded-lg transition-colors cursor-pointer font-medium">
+              <Button variant="outline" size="sm" onClick={handleClear} disabled={loading}>
                 Clear
-              </button>
-              <button onClick={loadExample} disabled={loading} className="text-sm px-4 py-2 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded-lg transition-colors cursor-pointer font-medium">
+              </Button>
+              <Button variant="outline" size="sm" onClick={loadExample} disabled={loading}>
                 Example Contract
-              </button>
+              </Button>
             </div>
-            <button onClick={handleSubmit} disabled={loading} className="text-sm font-bold px-6 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg transition-colors shadow-lg cursor-pointer">
+            <Button size="sm" onClick={handleSubmit} disabled={loading}>
               {loading ? 'Scanning...' : 'Scan Contract'}
-            </button>
+            </Button>
           </div>
 
           {/* Editor Area with explicit pixel height */}
