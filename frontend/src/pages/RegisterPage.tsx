@@ -2,10 +2,6 @@ import { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '@/context/AuthContext';
 import api from '@/api/client';
-import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/Card';
-import { Input } from '@/components/ui/Input';
-import { Button } from '@/components/ui/Button';
-import { Alert, AlertDescription } from '@/components/ui/Alert';
 
 export default function RegisterPage() {
   const { login } = useAuth();
@@ -37,50 +33,52 @@ export default function RegisterPage() {
   };
 
   return (
-    <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
+    <div className="min-h-screen bg-gray-950 flex items-center justify-center p-4">
       <div className="w-full max-w-md">
-        <Card>
-          <CardHeader className="text-center pb-2">
+        <div className="bg-gray-900 border border-gray-800 rounded-2xl p-8 shadow-2xl">
+          <div className="mb-8 text-center">
             <div className="text-3xl mb-2">🔍</div>
-            <CardTitle className="text-2xl">Create Account</CardTitle>
-            <p className="text-gray-500 mt-1 text-sm">Start scanning smart contracts for vulnerabilities</p>
-          </CardHeader>
-          <CardContent>
-            <form onSubmit={handleSubmit} className="space-y-4 pt-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Email</label>
-                <Input type="email" value={email} onChange={e => setEmail(e.target.value)} required placeholder="you@example.com" />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Password</label>
-                <Input type="password" value={password} onChange={e => setPassword(e.target.value)} required placeholder="Min. 8 characters" />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Account Type</label>
-                <select value={role} onChange={e => setRole(e.target.value as 'USER' | 'ADMIN')}
-                  className="flex h-10 w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
-                  <option value="USER">User — Scan & view own reports</option>
-                  <option value="ADMIN">Admin — Full system access</option>
-                </select>
-              </div>
+            <h1 className="text-2xl font-bold text-white">Create Account</h1>
+            <p className="text-gray-400 mt-1 text-sm">Start scanning smart contracts for vulnerabilities</p>
+          </div>
 
-              {error && (
-                <Alert variant="destructive">
-                  <AlertDescription>{error}</AlertDescription>
-                </Alert>
-              )}
+          <form onSubmit={handleSubmit} className="space-y-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-300 mb-1">Email</label>
+              <input type="email" value={email} onChange={e => setEmail(e.target.value)} required
+                placeholder="you@example.com"
+                className="w-full bg-gray-800 border border-gray-700 text-white rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 placeholder-gray-500" />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-300 mb-1">Password</label>
+              <input type="password" value={password} onChange={e => setPassword(e.target.value)} required
+                placeholder="Min. 8 characters"
+                className="w-full bg-gray-800 border border-gray-700 text-white rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 placeholder-gray-500" />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-300 mb-1">Account Type</label>
+              <select value={role} onChange={e => setRole(e.target.value as 'USER' | 'ADMIN')}
+                className="w-full bg-gray-800 border border-gray-700 text-white rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+                <option value="USER">User — Scan & view own reports</option>
+                <option value="ADMIN">Admin — Full system access</option>
+              </select>
+            </div>
 
-              <Button type="submit" disabled={loading} className="w-full">
-                {loading ? 'Creating account...' : 'Create Account'}
-              </Button>
-            </form>
+            {error && (
+              <div className="bg-red-900/40 border border-red-700 text-red-300 rounded-lg px-4 py-2.5 text-sm">{error}</div>
+            )}
 
-            <p className="text-center text-gray-500 text-sm mt-6">
-              Already have an account?{' '}
-              <Link to="/login" className="text-blue-600 hover:underline">Sign in</Link>
-            </p>
-          </CardContent>
-        </Card>
+            <button type="submit" disabled={loading}
+              className="w-full bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white font-semibold rounded-lg px-4 py-2.5 text-sm transition-colors">
+              {loading ? 'Creating account...' : 'Create Account'}
+            </button>
+          </form>
+
+          <p className="text-center text-gray-500 text-sm mt-6">
+            Already have an account?{' '}
+            <Link to="/login" className="text-blue-400 hover:text-blue-300">Sign in</Link>
+          </p>
+        </div>
       </div>
     </div>
   );
