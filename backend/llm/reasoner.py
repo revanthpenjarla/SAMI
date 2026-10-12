@@ -419,12 +419,12 @@ def compute_calibrated_confidence(
 
 
 class LLMReasoner:
-    def __init__(self, ollama_url: Optional[str] = None, model: str = "qwen2.5-coder:latest", prompt_mode: str = "P1"):
+    def __init__(self, ollama_url: Optional[str] = None, model: Optional[str] = None, prompt_mode: str = "P1"):
         if ollama_url is not None:
             self.ollama_url = ollama_url
         else:
             self.ollama_url = os.getenv("OLLAMA_URL", "http://localhost:11434")
-        self.model = model
+        self.model = model or os.getenv("OLLAMA_MODEL", "qwen2.5-coder:1.5b")
         self.prompt_mode = prompt_mode
         self.client = httpx.AsyncClient(
             base_url=self.ollama_url,
@@ -527,7 +527,7 @@ Return valid JSON matching the schema exactly. Do not output anything else.
             "options": {
                 "temperature": 0.2,
                 "repeat_penalty": 1.1,
-                "num_predict": 512
+                "num_predict": 256
             }
         }
 

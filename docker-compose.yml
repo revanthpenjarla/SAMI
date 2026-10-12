@@ -9,9 +9,9 @@ services:
       - "11434:11434"
     volumes:
       - ollama_data:/root/.ollama
-    # Automatically start server and pull the required Qwen model
+    # Automatically start server and pull the required Qwen 1.5B model
     entrypoint: >
-      /bin/sh -c "ollama serve & sleep 5 && ollama pull qwen2.5-coder:latest && wait"
+      /bin/sh -c "ollama serve & sleep 5 && ollama pull qwen2.5-coder:1.5b && wait"
 
   # 2. FastAPI Backend
   backend:

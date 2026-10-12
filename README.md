@@ -1,199 +1,80 @@
-# SMAI - Smart Contract Security Analysis with AI
+# Smart Contract Scanner AI 🔍
 
-SMAI is a research-grade smart contract vulnerability scanner that combines static analysis, RAG-based security knowledge retrieval, and LLM verification to identify security issues in Solidity smart contracts.
+An intelligent, AI-assisted smart contract vulnerability scanner that leverages Retrieval-Augmented Generation (RAG) and local Large Language Models (LLMs) to identify, explain, and mitigate security flaws in Solidity code.
 
-## Architecture
+## 🚀 Features
 
-The system follows a multi-phase pipeline:
+* **Multi-Layered Analysis Pipeline**: Combines lightning-fast static AST/Regex analysis with deep semantic AI reasoning.
+* **Inverted Gatekeeping**: If the static analyzer misses complex business-logic flaws, the system automatically extracts state-modifying candidate slices and feeds them to the LLM for a mandatory deep semantic audit.
+* **100% Local AI**: Designed to run entirely locally using **Ollama** (e.g., `qwen2.5-coder:1.5b`), ensuring absolute privacy for your proprietary smart contracts. Fully GPU-accelerated.
+* **RAG-Powered Context**: Dynamically retrieves exact Smart Contract Weakness Classification (SWC) and Common Weakness Enumeration (CWE) definitions to ground the LLM's reasoning and prevent hallucinations.
+* **Strict Code-Grounded Output**: The LLM outputs strict JSON mapped to Pydantic schemas, providing exact function traces, bespoke attack scenarios, and tailored fix recommendations.
+* **Modern Dashboard**: A responsive React/Vite UI featuring severity badges, Git-style code diff viewers, and real-time background polling.
 
-1. **Static Analysis**: Rule-based detection of common Solidity vulnerabilities (reentrancy, tx.origin, unchecked calls, etc.)
-2. **RAG Retrieval**: Security knowledge base lookup for vulnerability context and mitigation patterns
-3. **LLM Verification**: Qwen2.5-Coder model for grounded vulnerability confirmation with prompt injection protection
-4. **Security Scoring**: Evidence-based scoring (0-100) with severity floors and spam resistance
-5. **Integrity/Provenance**: SHA-256/Keccak-256 hashing, finding canonicalization, Merkle trees, report hashing
-6. **Fix Verification**: Static re-analysis of proposed fixes with category resolution and new severe finding detection
-7. **Blockchain Audit Registry**: Optional on-chain audit registration (EVM-compatible, uses AuditRegistry contract)
+## 🏗️ Architecture
 
-## Supported Vulnerability Classes
+1. **Frontend**: React + TypeScript + Vite + TailwindCSS.
+2. **Backend**: FastAPI + Python + SQLAlchemy (SQLite).
+3. **LLM Engine**: Ollama (Local LLM Server).
+4. **RAG Knowledge Base**: TF-IDF & Cosine Similarity vector store based on SWC/CWE definitions.
 
-- Reentrancy (SWC-107)
-- Unchecked Low-Level Calls (SWC-104)
-- tx.origin Authentication (SWC-115)
-- Timestamp Dependence (SWC-116)
-- Unprotected Selfdestruct (SWC-106)
-- Dangerous Delegatecall (SWC-112)
-- Uninitialized Storage Pointers (SWC-109)
-- Missing Zero Address Validation (SWC-136)
-- Floating Pragma (SWC-103)
-- ECRecover Validation (SWC-117)
-- Integer Overflow (SWC-101)
-- Missing Access Control (SWC-105)
+## 🛠️ Installation & Setup
 
-## Analysis Modes
+You can run the scanner entirely via Docker (recommended) or natively on your host machine.
 
-The system supports three analysis modes:
+### Option A: Fully Dockerized (Recommended)
 
-- **Hybrid**: Static Analysis + RAG + AI Verification (recommended)
-- **RAG Only**: Static Analysis + Security Knowledge Retrieval (no AI)
-- **AI Only**: Static Analysis + Qwen AI Verification (no RAG)
-
-Static classification (category, SWC ID, severity, affected lines) remains authoritative in all modes. The LLM does not override static detector decisions.
-
-## Components
-
-### Backend (FastAPI)
-- `backend/analyzer/`: Static analysis engine
-- `backend/rag/`: Knowledge base and retrieval
-- `backend/llm/`: LLM verification with Ollama integration
-- `backend/core/`: Security scoring, integrity hashing, blockchain registry
-- `backend/api/`: REST API endpoints
-- `backend/db/`: PostgreSQL database models
-
-### Frontend (React + TypeScript + Vite)
-- Monaco Editor for Solidity code editing
-- Analysis mode selector
-- Report visualization with source highlighting
-- Finding navigation and evidence display
-- Fix verification interface
-- Blockchain status display
-
-### Tests
-- Static analyzer tests (35 tests)
-- RAG retrieval tests (8 tests)
-- Integrity hashing tests (13 tests)
-- Fix verification tests (8 tests)
-- Blockchain registry tests (15 tests)
-- Security scoring tests (9 tests)
-- Pipeline integration tests (4 tests)
-- LLM adversarial tests (3 tests)
-
-## Quick Start with Docker
+Requires Docker and Docker Compose. This will spin up the Frontend, Backend, and Ollama in isolated containers.
 
 ```bash
-docker compose up --build
+# 1. Clone the repository
+git clone https://github.com/revanthpenjarla/smart-contract-scanner-ai.git
+cd smart-contract-scanner-ai
+
+# 2. Start the Docker stack
+docker compose up -d --build
+
+# 3. Pull the local LLM model (First time only)
+# Note: If running Ollama inside docker, CPU is used by default.
+docker exec -it scanner_ollama ollama run qwen2.5-coder:1.5b
 ```
 
-This starts:
-- Ollama (with qwen2.5-coder:latest model)
-- FastAPI backend on port 8000
-- React frontend on port 5173
+Access the UI at: `http://localhost:5173`
 
-## Manual Setup
+*(Note: If you have a GPU on your host and Ollama installed natively, the `docker-compose.yml` is already configured to route `OLLAMA_URL=http://host.docker.internal:11434` to utilize your host GPU. In that case, you do not need the `scanner_ollama` container.)*
 
-### Backend
+### Option B: Native Execution (No Docker)
+
+Requires Node.js (v18+) and Python (3.10+).
+
 ```bash
-cd backend
-uv pip install -r requirements.txt
-python -m uvicorn main:app --reload --port 8000
-```
+# 1. Start the Backend
+python -m venv .venv
+source .venv/bin/activate
+pip install -r backend/requirements.txt
+uvicorn backend.main:app --reload
 
-### Frontend
-```bash
+# 2. Start the Frontend (in a new terminal)
 cd frontend
-bun install
-bun run dev
+npm install
+npm run dev
+
+# 3. Start Local Ollama (in a new terminal)
+ollama run qwen2.5-coder:1.5b
 ```
 
-### Ollama
-```bash
-ollama pull qwen2.5-coder:latest
-ollama serve
-```
+## 🛡️ Vulnerability Detection Scope
 
-## Testing
+Currently optimized to detect:
+* **Critical**: Missing Access Control, Dangerous Delegatecall, Unprotected Selfdestruct
+* **High**: Reentrancy, Authorization via `tx.origin`
+* **Medium**: Unchecked Arithmetic, Unbounded Loops, Unchecked Low-Level Calls, Timestamp Dependence, Uninitialized Storage
+* **Low**: Missing Zero Address Checks
 
-Run targeted test suites:
+## 🧪 Testing
 
-```bash
-# Static analyzer
-pytest tests/test_static_analyzer.py -v
+The codebase includes comprehensive real-world benchmarks (`tests/benchmark_real_world.py`), validating the pipeline against historical Web3 hacks (The DAO, King of the Ether, Parity Wallet).
 
-# RAG
-pytest tests/test_rag.py tests/test_rag_adversarial.py -v
+## 📄 License
 
-# Integrity
-pytest tests/test_integrity.py -v
-
-# Fix verification
-pytest tests/test_fix_verification.py -v
-
-# Blockchain registry
-pytest tests/test_blockchain_registry.py -v
-
-# Security scoring
-pytest tests/test_score_hardening.py -v
-
-# Pipeline
-pytest tests/test_pipeline.py -v
-
-# LLM adversarial
-pytest tests/test_llm_adversarial.py -v
-```
-
-## Security Semantics
-
-- **Static Authority**: The static analyzer is authoritative for vulnerability category, SWC ID, severity, and affected lines. The LLM must not override static classification.
-- **RAG Similarity**: RAG similarity is retrieval evidence, not a calibrated probability. It must not be treated as confidence.
-- **LLM Confidence**: LLM confidence is self-reported and not empirically calibrated unless evidence exists.
-- **Security Score**: An evidence-based score from 0-100, not a "percentage of security."
-- **Prompt Injection Protection**: Source code delimiters and explicit directives prevent prompt injection from contract code.
-
-## Performance
-
-- LLM timeout: 120s (connect: 10s)
-- num_predict: 512 tokens (reduced from 1024)
-- Fix verification uses asyncio.to_thread to avoid blocking
-- Sequential verification by default (Ollama stability)
-
-## Integrity / Provenance
-
-Phase 1 integrity features:
-- Source hash (SHA-256)
-- Source hash (Keccak-256, optional)
-- Finding hash (canonical representation)
-- Findings hash (deterministic collection hash)
-- Findings Merkle root
-- Report hash (canonical report digest)
-- Ephemeral IDs and timestamps excluded from canonical content
-
-## Fix Verification
-
-Fix verification flow:
-1. Validates syntax of proposed fixed code
-2. Reruns static analysis on fixed code
-3. Checks if original vulnerability category is resolved
-4. Detects newly introduced Critical/High findings
-5. Preserves original vulnerability category
-6. Returns verification details with compiler_verification = "not_performed" (solc not used)
-
-Does not claim formal verification. If solc is unavailable, reports compiler_verification as not_performed.
-
-## Blockchain Audit Registry
-
-Optional trust/provenance layer for on-chain audit registration. Not required for vulnerability scanning.
-
-Configuration (optional):
-- `AUDIT_REGISTRY_ADDRESS`: Contract address
-- `AUDIT_REGISTRY_RPC_URL`: RPC endpoint
-- `AUDIT_REGISTRY_PRIVATE_KEY`: Signer private key
-- `AUDIT_REGISTRY_CHAIN_ID`: Chain ID
-
-Features:
-- Graceful handling of missing configuration
-- Register-audit endpoint
-- Verify-audit endpoint
-- Owner/RBAC checks
-- Phase 1 hash usage
-- Mock blockchain support in tests
-
-## Limitations
-
-- Tested benchmark performance on specific test suites; general real-world detection capability may vary.
-- LLM verification depends on Ollama availability and model quality.
-- Fix verification does not perform formal verification or compiler checks.
-- Blockchain registration requires manual configuration and web3.py.
-- RAG knowledge base is curated and may not cover all vulnerability patterns.
-
-## License
-
-Research project. See individual component licenses for details.
+MIT License

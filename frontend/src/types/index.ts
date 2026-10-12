@@ -12,30 +12,28 @@ export interface AuthState {
 export interface VerifiedVulnerability {
   finding_id: string;
   is_vulnerable: boolean;
-  verification_status?: 'CONFIRMED' | 'REJECTED' | 'UNVERIFIED';
-  vulnerability: string;
+  type: string;
+  title: string;
   severity: 'Critical' | 'High' | 'Medium' | 'Low' | 'Informational';
   confidence: number;
-  static_confidence?: number;
-  affected_lines: number[];
-  evidence: { function: string; lines: number[] }[];
-  explanation: string;
-  attack_scenario: string;
+  function: string;
+  line: number;
+  description: string;
+  staticEvidence: string;
+  attackScenario: string;
   recommendation: string;
-  fixed_code: string;
-  static_evidence: string;
-  original_code: string;
-  retrieved_knowledge?: Record<string, unknown>[];
+  fallback_used: boolean;
+  fallback_reason?: string;
+  verification_status?: 'CONFIRMED' | 'REJECTED' | 'UNVERIFIED';
+  verifier_source?: string;
+  model_used?: string;
+  swcId: string;
+  cweId: string;
+  codeSnippet: string;
+  fixed_code?: string;
+  static_confidence?: number;
   rag_similarity_score?: number;
   rag_explanation?: string;
-  contract?: string;
-  function?: string;
-  swc_id?: string;
-  fix_verified?: boolean;
-  fix_verification_reason?: string;
-  fallback_used?: boolean;
-  fallback_reason?: string;
-  model_used?: string;
 }
 
 export interface VulnerabilityReport {
@@ -46,17 +44,16 @@ export interface VulnerabilityReport {
   is_vulnerable: boolean;
   severity_counts: Record<string, number>;
   findings: VerifiedVulnerability[];
+  suppressed_findings?: VerifiedVulnerability[];
+  raw_findings_count?: number;
+  ai_confirmed_count?: number;
+  ai_rejected_count?: number;
   summary: string;
+  mode?: string;
+  analysis_mode?: string;
+  model_used?: string;
   security_score?: number;
   risk_level?: string;
-  source_code?: string;
-  // Phase 3: Blockchain Audit Registry fields
-  audit_id?: string;
-  tx_hash?: string;
-  registry_address?: string;
-  chain_id?: number;
-  on_chain_status?: string;
-  on_chain_timestamp?: string;
   source_hash?: string;
   report_hash?: string;
 }

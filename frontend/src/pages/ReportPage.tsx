@@ -1,1023 +1,326 @@
-import { useEffect, useRef, useState, useCallback } from 'react';
+import React, { useEffect, useState, lazy, Suspense, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import Navbar from '@/components/Navbar';
-import api from '@/api/client';
-import { VulnerabilityReport, VerifiedVulnerability } from '@/types';
+import AppLayout from '@/components/AppLayout';
 import SeverityBadge from '@/components/SeverityBadge';
 import DiffViewer from '@/components/DiffViewer';
-import { PrismLight as SyntaxHighlighter } from 'react-syntax-highlighter';
-import js from 'react-syntax-highlighter/dist/esm/languages/prism/javascript';
-import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
+import RiskBar from '@/components/RiskBar';
+import api from '@/api/client';
+import type { VulnerabilityReport, VerifiedVulnerability } from '@/types';
+import { calculateSecurityScore } from '@/lib/design-tokens';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
+import { Alert, AlertDescription } from '@/components/ui/alert';
+import {
+  ShieldAlert,
+  ShieldCheck,
+  ArrowLeft,
+  FileCode,
+  Sparkles,
+  GitCompare,
+  BookOpen,
+  CheckCircle,
+  ChevronDown,
+  ChevronUp,
+  Download,
+  FileText,
+  Printer,
+  Search,
+  Filter,
+  Copy,
+  Check,
+  Cpu,
+  AlertTriangle,
+} from 'lucide-react';
 
-SyntaxHighlighter.registerLanguage('solidity', js);
+const CodeViewer = lazy(() => import('@/components/CodeViewer'));
+const SEVERITIES = ['Critical', 'High', 'Medium', 'Low', 'Informational'] as const;
 
-// ─────────────────────────────────────────── helpers ──
-function fmtTimestamp(ts: string): string {
-  if (!ts) return '—';
-  try {
-    return new Intl.DateTimeFormat(undefined, {
-      year: 'numeric', month: 'short', day: '2-digit',
-      hour: '2-digit', minute: '2-digit',
-    }).format(new Date(ts));
-  } catch {
-    return ts;
-  }
-}
+function FindingCard({ f, idx, isSuppressed = false }: { f: VerifiedVulnerability; idx: number; isSuppressed?: boolean }) {
+  const [open, setOpen] = useState(idx === 0 && !isSuppressed);
+  const [activeTab, setActiveTab] = useState<'explanation' | 'code' | 'diff'>('explanation');
+  const [copiedPatch, setCopiedPatch] = useState(false);
+  const hasDiff = !!f.fixed_code && f.fixed_code !== f.codeSnippet && f.fixed_code.trim().length > 0;
 
-function getFriendlyName(id: string): string {
-  const map: Record<string, string> = {
-    'reentrancy': 'Reentrancy',
-    'tx-origin': 'tx.origin Authorization Bypass',
-    'floating-pragma': 'Floating Pragma',
-    'unprotected-selfdestruct': 'Unprotected Self-Destruct',
-    'unchecked-call': 'Unchecked Call Return Value',
-    'missing-access-control': 'Missing Access Control',
-    'integer-overflow': 'Integer Overflow / Underflow',
-    'timestamp-dependence': 'Timestamp Dependence',
-  };
-  return map[id] || id.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
-}
+  const isHighOrCrit = !isSuppressed && (f.severity === 'Critical' || f.severity === 'High');
 
-function getModeLabel(mode: string): string {
-  if (mode === 'hybrid') return 'Hybrid (Static + RAG + AI)';
-  if (mode === 'rag') return 'RAG Only (Static + Knowledge)';
-  if (mode === 'ai') return 'AI Only (Static + Qwen)';
-  return mode;
-}
-
-function getModeColor(mode: string): string {
-  if (mode === 'hybrid') return 'bg-blue-500/10 text-blue-300 border-blue-500/30';
-  if (mode === 'rag') return 'bg-purple-500/10 text-purple-300 border-purple-500/30';
-  if (mode === 'ai') return 'bg-emerald-500/10 text-emerald-300 border-emerald-500/30';
-  return 'bg-gray-700 text-gray-300 border-gray-600';
-}
-
-function getRiskColors(risk: string | undefined) {
-  if (risk === 'Critical Risk') return { text: 'text-red-400', border: 'border-red-500/30', bg: 'bg-red-500/10', stroke: '#ef4444' };
-  if (risk === 'High Risk') return { text: 'text-orange-400', border: 'border-orange-500/30', bg: 'bg-orange-500/10', stroke: '#f97316' };
-  if (risk === 'Moderate Risk') return { text: 'text-yellow-400', border: 'border-yellow-500/30', bg: 'bg-yellow-500/10', stroke: '#eab308' };
-  return { text: 'text-green-400', border: 'border-green-500/30', bg: 'bg-green-500/10', stroke: '#22c55e' };
-}
-
-function getScoreStroke(score: number): string {
-  if (score >= 80) return '#22c55e';
-  if (score >= 60) return '#eab308';
-  if (score >= 40) return '#f97316';
-  return '#ef4444';
-}
-
-// ─────────────────────────────────────────── Phase 2: Score Gauge ──
-function ScoreGauge({ score, risk }: { score: number; risk: string | undefined }) {
-  const r = 54;
-  const circ = 2 * Math.PI * r;
-  const fill = circ * (score / 100);
-  const stroke = getScoreStroke(score);
-  const riskColors = getRiskColors(risk);
-
-  return (
-    <div className="flex flex-col items-center">
-      <div className="relative w-28 h-28">
-        <svg className="w-full h-full -rotate-90" viewBox="0 0 120 120">
-          {/* track */}
-          <circle cx="60" cy="60" r={r} fill="none" stroke="#1f2937" strokeWidth="10" />
-          {/* progress */}
-          <circle
-            cx="60" cy="60" r={r}
-            fill="none"
-            stroke={stroke}
-            strokeWidth="10"
-            strokeLinecap="round"
-            strokeDasharray={`${fill} ${circ}`}
-            style={{ transition: 'stroke-dasharray 0.8s ease' }}
-          />
-        </svg>
-        <div className="absolute inset-0 flex flex-col items-center justify-center">
-          <span className="text-2xl font-extrabold text-white leading-none">{score}</span>
-          <span className="text-gray-500 text-[10px]">/100</span>
-        </div>
-      </div>
-      <p className={`mt-1.5 text-[10px] font-bold uppercase tracking-widest ${riskColors.text}`}>
-        {risk ?? 'Unknown Risk'}
-      </p>
-      <p className="text-gray-600 text-[9px] mt-0.5 uppercase tracking-wider">Security Score</p>
-    </div>
-  );
-}
-
-// ─────────────────────────────────────────── Phase 1: Report Header ──
-interface ReportHeaderProps {
-  report: VulnerabilityReport;
-  mode: string;
-  confirmedCount: number;
-  rejectedCount: number;
-  unverifiedCount: number;
-}
-
-function ReportHeader({ report, mode, confirmedCount, rejectedCount, unverifiedCount }: ReportHeaderProps) {
-  const riskColors = getRiskColors(report.risk_level);
-  const isSafe = report.findings.length === 0;
-
-  return (
-    <div className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden mb-6 shadow-lg">
-      {/* Top stripe */}
-      <div className="h-1 w-full bg-gradient-to-r from-blue-600 via-blue-500 to-indigo-600" />
-
-      <div className="p-6 md:p-8">
-        {/* Title row */}
-        <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-4 mb-6">
-          <div>
-            <p className="text-gray-500 text-xs font-bold uppercase tracking-widest mb-1">Security Scan Report</p>
-            <h1 className="text-2xl md:text-3xl font-extrabold text-white tracking-tight">
-              {report.contract_name}
-            </h1>
-            <p className="text-gray-500 text-sm mt-1">{fmtTimestamp(report.timestamp)}</p>
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            {/* Analysis mode badge */}
-            <span className={`inline-flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-full border ${getModeColor(mode)}`}>
-              <span className="w-1.5 h-1.5 rounded-full bg-current opacity-70" />
-              {getModeLabel(mode)}
-            </span>
-            {/* Overall verdict */}
-            {isSafe ? (
-              <span className="inline-flex items-center gap-1.5 text-xs font-bold px-3 py-1.5 rounded-full border bg-green-500/10 text-green-400 border-green-500/30">
-                ✓ NO ISSUES FOUND
-              </span>
-            ) : (
-              <span className="inline-flex items-center gap-1.5 text-xs font-bold px-3 py-1.5 rounded-full border bg-amber-500/10 text-amber-400 border-amber-500/30">
-                ⚠ VULNERABILITIES DETECTED
-              </span>
-            )}
-          </div>
-        </div>
-
-        {/* Metrics grid — responsive, wraps safely */}
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
-          {/* Score gauge spans 2 cols always */}
-          <div className={`col-span-2 sm:col-span-1 lg:col-span-2 flex items-center justify-center rounded-xl border py-4 ${isSafe ? 'border-green-500/20 bg-green-500/5' : `${riskColors.border} ${riskColors.bg}`}`}>
-            <ScoreGauge score={report.security_score ?? 0} risk={report.risk_level} />
-          </div>
-
-          <MetricTile label="Risk Level" value={report.risk_level ?? 'Unknown'} valueClass={riskColors.text} />
-          <MetricTile label="Total" value={String(report.findings.length)} />
-          <MetricTile label="Confirmed" value={String(confirmedCount)} valueClass="text-green-400" />
-          <MetricTile label="Rejected" value={String(rejectedCount)} valueClass="text-gray-400" />
-          <MetricTile label="Unverified" value={String(unverifiedCount)} valueClass="text-amber-400" />
-        </div>
-
-        {/* Severity breakdown if there are findings */}
-        {!isSafe && (
-          <div className="mt-4 flex flex-wrap gap-2 pt-4 border-t border-gray-800">
-            {['Critical', 'High', 'Medium', 'Low', 'Informational'].map(sev => {
-              const count = report.severity_counts[sev] || 0;
-              if (!count) return null;
-              return <SeverityBadge key={sev} severity={sev} showDot size="sm" />;
-            })}
-            <span className="text-gray-600 text-xs self-center ml-1">
-              {report.findings.length} finding{report.findings.length !== 1 ? 's' : ''} total
-            </span>
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function MetricTile({ label, value, valueClass = 'text-white' }: { label: string; value: string; valueClass?: string }) {
-  return (
-    <div className="bg-gray-950/60 rounded-xl border border-gray-800 px-3 py-2.5 flex flex-col justify-center min-w-0">
-      <p className="text-gray-500 text-[10px] font-bold uppercase tracking-wider mb-0.5 truncate">{label}</p>
-      <p className={`text-xl font-extrabold ${valueClass} leading-none`}>{value}</p>
-    </div>
-  );
-}
-
-// ─────────────────────────────────────────── Source Code Panel ──
-interface SourcePanelProps {
-  source: string;
-  findings: VerifiedVulnerability[];
-  selectedFindingId: string | null;
-  onSelectFinding: (id: string | null) => void;
-}
-
-function SourceCodePanel({ source, findings, selectedFindingId, onSelectFinding }: SourcePanelProps) {
-  const containerRef = useRef<HTMLDivElement>(null);
-
-  const activeFindings = selectedFindingId
-    ? findings.filter(f => f.finding_id === selectedFindingId)
-    : findings;
-
-  const highlightLines: number[] = Array.from(
-    new Set(activeFindings.flatMap(f => f.affected_lines ?? []))
-  ).sort((a, b) => a - b);
-
-  useEffect(() => {
-    if (!containerRef.current || highlightLines.length === 0) return;
-    const lineHeight = 19.2;
-    const offset = (highlightLines[0] - 1) * lineHeight;
-    containerRef.current.scrollTop = Math.max(0, offset - 80);
-  }, [selectedFindingId]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const lineProps = useCallback(
-    (lineNumber: number): React.HTMLAttributes<HTMLElement> => {
-      if (!highlightLines.includes(lineNumber)) return {};
-      return {
-        style: {
-          display: 'block',
-          backgroundColor: 'rgba(239,68,68,0.12)',
-          borderLeft: '3px solid #ef4444',
-          marginLeft: '-3px',
-          paddingLeft: '4px',
-        },
-      };
-    },
-    [highlightLines] // eslint-disable-line react-hooks/exhaustive-deps
-  );
-
-  const activeFinding = selectedFindingId ? findings.find(f => f.finding_id === selectedFindingId) : null;
-
-  return (
-    <div className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden flex flex-col h-full min-w-0">
-      {/* Panel header */}
-      <div className="px-4 py-3 border-b border-gray-800 bg-gray-900/80 flex-shrink-0 min-w-0">
-        <div className="flex items-center justify-between mb-2 gap-2">
-          <h3 className="text-white font-bold text-sm flex items-center gap-2 truncate">
-            <span className="text-blue-400 font-mono text-xs flex-shrink-0">{'<>'}</span>
-            <span className="truncate">{activeFinding ? getFriendlyName(activeFinding.vulnerability) : 'Vulnerable Source Code'}</span>
-          </h3>
-          {selectedFindingId && (
-            <button
-              onClick={() => onSelectFinding(null)}
-              className="text-[11px] text-gray-400 hover:text-white border border-gray-700 hover:border-gray-500 px-2 py-0.5 rounded transition-colors flex-shrink-0"
-            >
-              Show All
-            </button>
-          )}
-        </div>
-
-        {/* Finding toolbar */}
-        {findings.length > 0 && (
-          <div className="flex flex-wrap gap-1.5">
-            {findings.map((f, idx) => {
-              const isActive = selectedFindingId === f.finding_id;
-              const firstLine = f.affected_lines?.[0];
-              return (
-                <button
-                  key={f.finding_id}
-                  onClick={() => onSelectFinding(isActive ? null : f.finding_id)}
-                  className={`text-[11px] font-mono px-2.5 py-1 rounded border transition-all flex items-center gap-1
-                    ${isActive
-                      ? 'bg-blue-600/20 border-blue-500 text-blue-300'
-                      : 'bg-gray-950 border-gray-700 text-gray-400 hover:border-gray-500 hover:text-gray-200'
-                    }`}
-                >
-                  <span className="font-bold">#{idx + 1}</span>
-                  <span className="hidden sm:inline max-w-[90px] truncate">{getFriendlyName(f.vulnerability)}</span>
-                  {firstLine != null && <span className="text-gray-500 text-[10px]">L{firstLine}</span>}
-                </button>
-              );
-            })}
-          </div>
-        )}
-
-        {highlightLines.length > 0 && (
-          <p className="text-[11px] text-red-400 mt-2 flex items-center gap-1.5">
-            <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse inline-block" />
-            Lines {highlightLines.slice(0, 8).join(', ')}{highlightLines.length > 8 ? ` +${highlightLines.length - 8} more` : ''} flagged
-          </p>
-        )}
-      </div>
-
-      {/* Scrollable code area — overflow-x-auto keeps long lines inside the panel */}
-      <div ref={containerRef} className="overflow-y-auto overflow-x-auto flex-1" style={{ maxHeight: '560px' }}>
-        <SyntaxHighlighter
-          language="solidity"
-          style={vscDarkPlus}
-          showLineNumbers
-          wrapLines
-          lineProps={lineProps}
-          customStyle={{
-            margin: 0,
-            borderRadius: 0,
-            fontSize: '0.72rem',
-            lineHeight: '1.6',
-            background: 'transparent',
-            padding: '12px 0',
-            minWidth: 0,
-          }}
-          lineNumberStyle={{
-            color: '#374151',
-            minWidth: '3em',
-            paddingRight: '1.2em',
-            userSelect: 'none',
-            textAlign: 'right',
-          }}
-        >
-          {source}
-        </SyntaxHighlighter>
-      </div>
-    </div>
-  );
-}
-
-// ─────────────────────────────────────────── Accordion Section ──
-function AccordionSection({
-  title,
-  icon,
-  defaultOpen = false,
-  children,
-  badge,
-}: {
-  title: string;
-  icon?: string;
-  defaultOpen?: boolean;
-  children: React.ReactNode;
-  badge?: React.ReactNode;
-}) {
-  const [open, setOpen] = useState(defaultOpen);
-  return (
-    <div className="border-t border-gray-800/60">
-      <button
-        onClick={() => setOpen(o => !o)}
-        className="w-full flex items-center justify-between px-5 py-3.5 text-left hover:bg-gray-800/30 transition-colors"
-      >
-        <span className="flex items-center gap-2 text-sm font-semibold text-gray-300">
-          {icon && <span className="text-gray-500">{icon}</span>}
-          {title}
-          {badge}
-        </span>
-        <span className={`text-gray-500 text-xs transition-transform duration-200 ${open ? 'rotate-180' : ''}`}>▾</span>
-      </button>
-      {open && (
-        <div className="px-5 pb-5 space-y-3">
-          {children}
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ─────────────────────────────────────────── Code Block ──
-function CodeBlock({ code, startLine = 1 }: { code: string; startLine?: number }) {
-  return (
-    <div className="rounded-lg overflow-hidden border border-gray-800 text-xs bg-[#0d1117] min-w-0">
-      <div className="flex items-center gap-1.5 px-3 py-1.5 bg-gray-800/80 border-b border-gray-700">
-        <span className="w-2 h-2 rounded-full bg-red-500/70" />
-        <span className="w-2 h-2 rounded-full bg-yellow-500/70" />
-        <span className="w-2 h-2 rounded-full bg-green-500/70" />
-      </div>
-      <div className="overflow-x-auto">
-        <SyntaxHighlighter
-          language="solidity"
-          style={vscDarkPlus}
-          showLineNumbers
-          startingLineNumber={startLine}
-          wrapLines
-          customStyle={{ margin: 0, borderRadius: 0, fontSize: '0.71rem', lineHeight: '1.6', background: 'transparent', padding: '10px 0' }}
-          lineNumberStyle={{ color: '#374151', minWidth: '3em', paddingRight: '1em', userSelect: 'none', textAlign: 'right' }}
-        >
-          {code}
-        </SyntaxHighlighter>
-      </div>
-    </div>
-  );
-}
-
-// ─────────────────────────────────────────── Finding Card (Phases 3, 5–9) ──
-function FindingCard({
-  f,
-  index,
-  isActive,
-  onSelect,
-  analysisId,
-  onUpdateFinding,
-}: {
-  f: VerifiedVulnerability;
-  index: number;
-  isActive: boolean;
-  onSelect: () => void;
-  analysisId?: string;
-  onUpdateFinding?: (updated: VerifiedVulnerability) => void;
-}) {
-  const [verifying, setVerifying] = useState(false);
-  const [verifyError, setVerifyError] = useState('');
-
-  const handleVerifyFix = async () => {
-    if (!analysisId || !f.fixed_code || f.fixed_code === 'N/A') return;
-    setVerifying(true);
-    setVerifyError('');
-    try {
-      const res = await api.post('/api/analysis/verify-fix', {
-        analysis_id: analysisId,
-        finding_id: f.finding_id,
-        fixed_code: f.fixed_code,
-      });
-      if (onUpdateFinding) {
-        onUpdateFinding({
-          ...f,
-          fix_verified: res.data.fix_verified,
-          fix_verification_reason: res.data.verification_reason,
-        });
-      }
-    } catch (err: any) {
-      setVerifyError(err.response?.data?.detail || 'Fix verification failed');
-    } finally {
-      setVerifying(false);
+  const copyPatch = () => {
+    if (f.fixed_code) {
+      navigator.clipboard.writeText(f.fixed_code);
+      setCopiedPatch(true);
+      setTimeout(() => setCopiedPatch(false), 2000);
     }
   };
 
-  const isConfirmed = f.verification_status === 'CONFIRMED';
-  const isRejected = f.verification_status === 'REJECTED';
-  const isUnverified = !isConfirmed && !isRejected;
-
-  const hasRag = Boolean(f.retrieved_knowledge && f.retrieved_knowledge.length > 0);
-  const hasBeforeAfter = Boolean(
-    f.original_code && f.original_code !== 'Code unavailable' && f.original_code !== 'N/A' &&
-    f.fixed_code && f.fixed_code !== 'N/A'
-  );
-
-  const statusChip = isConfirmed
-    ? <span className="text-[11px] font-bold text-green-400 bg-green-500/10 border border-green-500/30 px-2 py-0.5 rounded-full">✓ AI Confirmed</span>
-    : isRejected
-      ? <span className="text-[11px] font-bold text-gray-400 bg-gray-700/50 border border-gray-600/40 px-2 py-0.5 rounded-full">✗ Rejected</span>
-      : <span className="text-[11px] font-bold text-amber-400 bg-amber-500/10 border border-amber-500/30 px-2 py-0.5 rounded-full">⚠ Unverified</span>;
+  const isAiConfirmed = f.verification_status === 'CONFIRMED' || (!f.fallback_used && f.verification_status !== 'UNVERIFIED' && f.model_used !== 'RAG Only (No AI)' && !!f.model_used);
+  const isAiFallback = !!f.fallback_used;
 
   return (
-    <div
-      id={`finding-${f.finding_id}`}
-      className={`border rounded-xl overflow-hidden mb-4 shadow-sm transition-all duration-200 min-w-0
-        ${isActive ? 'border-blue-500/50 shadow-blue-950/30 shadow-md' : 'border-gray-800 bg-gray-900'}`}
+    <Card
+      className={`overflow-hidden transition-all duration-200 border ${
+        isSuppressed
+          ? 'border-blue-900/40 bg-[#09101d]/70 opacity-90'
+          : isHighOrCrit
+          ? 'border-red-500/30 bg-[#0c1222]/90 shadow-[0_0_16px_rgba(239,68,68,0.08)]'
+          : 'border-slate-800/80 bg-[#0c1222]/80'
+      }`}
     >
-      {/* ── Card Header (always visible, clickable) ── */}
-      <div
-        className="p-5 cursor-pointer hover:bg-gray-800/40 transition-colors"
-        onClick={onSelect}
+      {/* Header button for expanding/collapsing */}
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        className="w-full px-5 py-4 flex items-center justify-between hover:bg-slate-800/40 transition-colors text-left"
       >
-        {/* Top row: number + severity + SWC + status */}
-        <div className="flex flex-wrap items-center gap-2 mb-3">
-          <span className="text-gray-600 text-xs font-mono font-bold">#{index + 1}</span>
-          <SeverityBadge severity={f.severity} showDot />
-          {f.swc_id && (
-            <span className="text-[11px] font-mono text-gray-500 bg-gray-800 px-2 py-0.5 rounded border border-gray-700">
-              {f.swc_id}
-            </span>
-          )}
-          {statusChip}
-        </div>
-
-        {/* Name */}
-        <h3 className="text-lg font-bold text-white mb-2 capitalize">
-          {getFriendlyName(f.vulnerability)}
-        </h3>
-
-        {/* Quick stats */}
-        <div className="flex flex-wrap gap-x-5 gap-y-1.5 text-xs text-gray-400 mb-3">
-          {f.function && (
-            <span>Function: <code className="text-gray-300 font-mono">{f.function}</code></span>
-          )}
-          <span>
-            Affected Lines:{' '}
-            <code className="text-gray-300 font-mono">
-              {f.affected_lines?.length ? f.affected_lines.join(', ') : 'N/A'}
-            </code>
+        <div className="flex items-center gap-3.5 min-w-0">
+          <span className="text-slate-500 font-mono text-xs w-6 shrink-0">
+            #{idx + 1}
           </span>
-          <span>
-            Confidence:{' '}
-            <span className="text-white font-semibold">{(f.confidence * 100).toFixed(1)}%</span>
-          </span>
-        </div>
-
-        {/* Short explanation preview */}
-        {f.explanation && (
-          <p className="text-gray-400 text-sm leading-relaxed line-clamp-2">
-            {f.explanation}
-          </p>
-        )}
-      </div>
-
-      {/* ── UNVERIFIED banner ── */}
-      {isUnverified && (
-        <div className="mx-5 mb-4 rounded-lg bg-amber-950/40 border border-amber-500/40 px-4 py-3">
-          <p className="text-amber-400 font-bold text-xs uppercase tracking-wide mb-1">⚠ Verification Incomplete</p>
-          <p className="text-amber-200/70 text-xs leading-relaxed">
-            AI verification could not be completed. This result requires manual security review.{' '}
-            <strong className="text-amber-300">Do not assume the contract is safe.</strong>
-          </p>
-        </div>
-      )}
-
-      {/* ══ ACCORDION SECTIONS ══ */}
-
-      {/* Phase 3: What is the problem */}
-      <AccordionSection title="What is the problem?" icon="❓" defaultOpen>
-        <p className="text-gray-300 text-sm leading-relaxed">{f.explanation || 'No explanation available.'}</p>
-        {f.contract && (
-          <p className="text-xs text-gray-500 mt-2">
-            Contract: <code className="text-gray-400 font-mono">{f.contract}</code>
-            {f.function && <> · Function: <code className="text-gray-400 font-mono">{f.function}</code></>}
-          </p>
-        )}
-      </AccordionSection>
-
-      {/* Phase 3: Where is it */}
-      <AccordionSection title="Where is it in my code?" icon="📍">
-        <div className="text-sm text-gray-400 mb-3">
-          Found at{' '}
-          {f.contract && <><code className="text-gray-300 font-mono">{f.contract}</code> → </>}
-          {f.function && <><code className="text-gray-300 font-mono">{f.function}()</code> · </>}
-          Lines: <code className="text-gray-300 font-mono">{f.affected_lines?.join(', ') || 'N/A'}</code>
-        </div>
-        {f.original_code && f.original_code !== 'Code unavailable' ? (
-          <CodeBlock code={f.original_code} startLine={f.affected_lines?.[0] ?? 1} />
-        ) : (
-          <p className="text-gray-600 text-xs italic">Code snippet unavailable — see source viewer.</p>
-        )}
-      </AccordionSection>
-
-      {/* Phase 5: Static Analysis */}
-      <AccordionSection
-        title="Static Analysis"
-        icon="🔎"
-        badge={
-          <span className="text-[10px] text-gray-600 font-mono ml-2">
-            {f.swc_id || f.vulnerability}
-          </span>
-        }
-      >
-        <div className="space-y-3">
-          <div className="bg-gray-950/60 rounded-lg border border-gray-800 p-3">
-            <p className="text-[10px] text-gray-500 font-bold uppercase tracking-wider mb-1">Detection Reason</p>
-            <p className="text-sm text-gray-300 font-mono leading-relaxed break-words">
-              {f.static_evidence || 'Static evidence not available.'}
-            </p>
-          </div>
-
-          <details className="group">
-            <summary className="cursor-pointer text-xs text-gray-500 hover:text-gray-300 select-none list-none flex items-center gap-1">
-              <span className="transition-transform group-open:rotate-90">▶</span> View Technical Details
-            </summary>
-            <div className="mt-2 grid grid-cols-2 gap-2 text-xs">
-              <div className="bg-gray-950/60 rounded border border-gray-800 p-2">
-                <span className="block text-gray-600 uppercase text-[10px] mb-0.5">Category</span>
-                <span className="text-gray-300 font-mono">{f.vulnerability}</span>
-              </div>
-              <div className="bg-gray-950/60 rounded border border-gray-800 p-2">
-                <span className="block text-gray-600 uppercase text-[10px] mb-0.5">SWC ID</span>
-                <span className="text-gray-300 font-mono">{f.swc_id || 'N/A'}</span>
-              </div>
-              <div className="bg-gray-950/60 rounded border border-gray-800 p-2">
-                <span className="block text-gray-600 uppercase text-[10px] mb-0.5">Static Confidence</span>
-                <span className="text-gray-300 font-mono">
-                  {f.static_confidence != null ? `${(f.static_confidence * 100).toFixed(1)}%` : 'N/A'}
+          <div className="min-w-0">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className={`font-bold text-sm ${isSuppressed ? 'text-slate-300 line-through' : 'text-slate-100'}`}>
+                {f.title || f.type}
+              </span>
+              {f.swcId && (
+                <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-blue-950/60 text-blue-300 border border-blue-800/50">
+                  {f.swcId}
                 </span>
-              </div>
-              <div className="bg-gray-950/60 rounded border border-gray-800 p-2">
-                <span className="block text-gray-600 uppercase text-[10px] mb-0.5">Finding ID</span>
-                <span className="text-gray-400 font-mono text-[10px] break-all">{f.finding_id}</span>
-              </div>
-            </div>
-          </details>
-        </div>
-      </AccordionSection>
-
-      {/* Phase 6: RAG Evidence */}
-      <AccordionSection
-        title="Security Knowledge Used"
-        icon="📚"
-        badge={
-          hasRag
-            ? <span className="text-[10px] text-purple-400 font-semibold ml-2">RAG</span>
-            : <span className="text-[10px] text-gray-600 ml-2">not used</span>
-        }
-      >
-        {hasRag ? (
-          <div className="space-y-2">
-            <p className="text-[11px] text-gray-500 uppercase font-bold tracking-wider">Retrieved Security Knowledge</p>
-            {(f.retrieved_knowledge ?? []).map((k, i) => {
-              const name = String((k as Record<string,unknown>).name || (k as Record<string,unknown>).vulnerability || 'Security Pattern');
-              const desc = String((k as Record<string,unknown>).description || '');
-              const swc = String((k as Record<string,unknown>).swc_id || '');
-              return (
-                <div key={i} className="bg-gray-950/60 rounded-lg border border-gray-800 p-3">
-                  <div className="flex items-center justify-between mb-1">
-                    <span className="text-purple-300 text-xs font-semibold">{name}</span>
-                    {swc && <span className="text-gray-600 text-[10px] font-mono">{swc}</span>}
-                  </div>
-                  {desc && <p className="text-gray-400 text-xs leading-relaxed line-clamp-3">{desc}</p>}
-                </div>
-              );
-            })}
-            {f.rag_similarity_score != null && (
-              <p className="text-[10px] text-gray-600">
-                Top retrieval relevance score: <span className="text-gray-400 font-mono">{f.rag_similarity_score.toFixed(4)}</span>
-                {' '}(higher = closer match to known vulnerability patterns)
-              </p>
-            )}
-            {f.rag_explanation && (
-              <div className="bg-gray-950/60 rounded border border-gray-800 p-3">
-                <p className="text-[10px] text-gray-500 uppercase font-bold tracking-wider mb-1">RAG Explanation</p>
-                <p className="text-xs text-gray-300 leading-relaxed">{f.rag_explanation}</p>
-              </div>
-            )}
-          </div>
-        ) : (
-          <p className="text-gray-500 text-sm italic">
-            RAG was not used for this scan. Switch to Hybrid or RAG Only mode to include security knowledge retrieval.
-          </p>
-        )}
-      </AccordionSection>
-
-      {/* Phase 7: AI Verification */}
-      <AccordionSection
-        title="AI Verification"
-        icon="🤖"
-        badge={
-          isConfirmed
-            ? <span className="text-[10px] text-green-400 font-semibold ml-2">Confirmed</span>
-            : isRejected
-              ? <span className="text-[10px] text-gray-400 font-semibold ml-2">Rejected</span>
-              : <span className="text-[10px] text-amber-400 font-semibold ml-2">Incomplete</span>
-        }
-      >
-        <div className="space-y-3">
-          {/* Model + status */}
-          <div className="flex flex-wrap gap-3">
-            <div className="bg-gray-950/60 rounded border border-gray-800 p-3 flex-1 min-w-[130px]">
-              <p className="text-[10px] text-gray-500 uppercase font-bold tracking-wider mb-0.5">AI Model</p>
-              <p className="text-gray-300 text-sm font-mono">{f.model_used ?? 'Qwen2.5-Coder'}</p>
-            </div>
-            <div className="bg-gray-950/60 rounded border border-gray-800 p-3 flex-1 min-w-[130px]">
-              <p className="text-[10px] text-gray-500 uppercase font-bold tracking-wider mb-0.5">Status</p>
-              {isConfirmed
-                ? <p className="text-green-400 font-bold text-sm">✓ Confirmed</p>
-                : isRejected
-                  ? <p className="text-gray-400 font-bold text-sm">✗ Rejected</p>
-                  : <p className="text-amber-400 font-bold text-sm">⚠ Incomplete</p>}
-            </div>
-            <div className="bg-gray-950/60 rounded border border-gray-800 p-3 flex-1 min-w-[130px]">
-              <p className="text-[10px] text-gray-500 uppercase font-bold tracking-wider mb-0.5">Confidence</p>
-              <p className="text-white font-bold text-sm">{(f.confidence * 100).toFixed(1)}%</p>
-            </div>
-          </div>
-
-          {/* Disclaimer */}
-          <p className="text-[11px] text-gray-600 italic">
-            Note: The static analyzer classification is authoritative. AI verification supplements, but does not override, static analysis results.
-          </p>
-
-          {/* Explanation */}
-          {f.explanation && (
-            <div className="bg-gray-950/60 rounded-lg border border-gray-800 p-3">
-              <p className="text-[10px] text-gray-500 uppercase font-bold tracking-wider mb-1">AI Explanation</p>
-              <p className="text-gray-300 text-sm leading-relaxed">{f.explanation}</p>
-            </div>
-          )}
-
-          {/* Attack scenario (not for unverified) */}
-          {!isUnverified && f.attack_scenario && (
-            <div className="bg-red-950/10 rounded-lg border border-red-500/10 p-3">
-              <p className="text-[10px] text-red-500/80 uppercase font-bold tracking-wider mb-1">⚡ Attack Scenario</p>
-              <p className="text-gray-300 text-sm leading-relaxed">{f.attack_scenario}</p>
-            </div>
-          )}
-
-          {/* Fallback warning */}
-          {f.fallback_used && (
-            <div className="bg-amber-950/20 rounded border border-amber-500/20 p-3">
-              <p className="text-amber-400 text-xs font-bold mb-0.5">⚠ Fallback Used</p>
-              <p className="text-amber-200/70 text-xs">{f.fallback_reason || 'AI inference was unavailable; static analysis result was used as-is.'}</p>
-            </div>
-          )}
-        </div>
-      </AccordionSection>
-
-      {/* Phase 8: Remediation */}
-      <AccordionSection title="Recommended Fix" icon="🛠">
-        <div className="space-y-3">
-          {/* Problem summary */}
-          <div className="bg-red-950/10 rounded-lg border border-red-500/10 p-3">
-            <p className="text-[10px] text-red-400/80 uppercase font-bold tracking-wider mb-1">Problem</p>
-            <p className="text-gray-300 text-sm leading-relaxed">
-              {f.static_evidence || f.explanation || 'See explanation above.'}
-            </p>
-          </div>
-
-          {/* Recommendation */}
-          <div className="bg-green-950/10 rounded-lg border border-green-500/10 p-3">
-            <p className="text-[10px] text-green-400/80 uppercase font-bold tracking-wider mb-1">Recommended Solution</p>
-            <p className="text-gray-300 text-sm leading-relaxed">
-              {f.recommendation || 'Review the affected code manually.'}
-            </p>
-          </div>
-
-          {/* Fixed code & verification */}
-          {f.fixed_code && f.fixed_code !== 'N/A' && (
-            <div className="space-y-3">
-              <div className="flex items-center justify-between">
-                <p className="text-[10px] text-gray-500 uppercase font-bold tracking-wider">Example Corrected Code</p>
-                {analysisId && (
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleVerifyFix();
-                    }}
-                    disabled={verifying}
-                    className="text-xs px-2.5 py-1 rounded bg-blue-600/20 hover:bg-blue-600/30 text-blue-400 border border-blue-500/30 disabled:opacity-50 transition-colors flex items-center gap-1.5"
-                  >
-                    {verifying && <span className="w-3 h-3 border-2 border-blue-400 border-t-transparent rounded-full animate-spin" />}
-                    {verifying ? 'Verifying...' : 'Re-verify Fix'}
-                  </button>
-                )}
-              </div>
-              <CodeBlock code={f.fixed_code} />
-
-              {verifyError && (
-                <p className="text-xs text-red-400">{verifyError}</p>
+              )}
+              {f.cweId && (
+                <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-purple-950/60 text-purple-300 border border-purple-800/50">
+                  {f.cweId}
+                </span>
               )}
 
-              {/* Fix Verification Status */}
-              <div
-                className={`rounded-lg border p-3 ${
-                  f.fix_verified
-                    ? 'bg-emerald-950/20 border-emerald-500/30 text-emerald-300'
-                    : 'bg-amber-950/20 border-amber-500/30 text-amber-300'
+              {/* Engine Attribution Badge */}
+              {isSuppressed ? (
+                <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-blue-950/80 text-blue-300 border border-blue-700/60 flex items-center gap-1 font-semibold">
+                  <ShieldCheck className="w-3 h-3 text-blue-400" /> AI Filtered (False Positive)
+                </span>
+              ) : isAiFallback ? (
+                <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-amber-950/80 text-amber-300 border border-amber-700/60 flex items-center gap-1 font-semibold" title={f.fallback_reason}>
+                  <AlertTriangle className="w-3 h-3 text-amber-400" /> AI Fallback ({f.fallback_reason || 'Unverified'})
+                </span>
+              ) : isAiConfirmed ? (
+                <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-emerald-950/80 text-emerald-300 border border-emerald-700/60 flex items-center gap-1 font-semibold">
+                  <Cpu className="w-3 h-3 text-emerald-400" /> AI Confirmed ({f.model_used || 'Qwen2.5-Coder'})
+                </span>
+              ) : (
+                <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-purple-950/80 text-purple-300 border border-purple-700/60 flex items-center gap-1 font-semibold">
+                  <FileCode className="w-3 h-3 text-purple-400" /> AST Heuristic Only
+                </span>
+              )}
+            </div>
+            <p className="text-slate-400 text-xs mt-1 flex items-center gap-2 flex-wrap font-mono">
+              {f.function && (
+                <span>
+                  Function:&nbsp;<span className="text-cyan-400">{f.function}</span>
+                </span>
+              )}
+              {f.function && <span className="text-slate-600">·</span>}
+              <span>
+                Line&nbsp;<span className="text-amber-400 font-semibold">{f.line}</span>
+              </span>
+              <span className="text-slate-600">·</span>
+              <span>
+                {isAiConfirmed ? 'Calibrated Conf: ' : 'Confidence: '}
+                <span className="text-slate-200 font-semibold">
+                  {(f.confidence * 100).toFixed(0)}%
+                </span>
+              </span>
+              {f.static_confidence !== undefined && isAiConfirmed && (
+                <>
+                  <span className="text-slate-600">·</span>
+                  <span className="text-slate-500">
+                    AST: {(f.static_confidence * 100).toFixed(0)}%
+                  </span>
+                </>
+              )}
+            </p>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-3 shrink-0 ml-3">
+          <SeverityBadge severity={f.severity} size="md" showDot />
+          <div className="w-6 h-6 rounded flex items-center justify-center text-slate-400 hover:text-slate-200">
+            {open ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+          </div>
+        </div>
+      </button>
+
+      {/* Expanded finding body */}
+      {open && (
+        <div className="border-t border-slate-800/80 bg-slate-950/60">
+          {/* Sub-tab navigation */}
+          <div className="flex border-b border-slate-800/80 px-5 gap-2 bg-[#090e1a]">
+            <button
+              type="button"
+              onClick={() => setActiveTab('explanation')}
+              className={`py-2.5 px-3 text-xs font-semibold flex items-center gap-1.5 border-b-2 transition-all ${
+                activeTab === 'explanation'
+                  ? 'border-cyan-400 text-cyan-400'
+                  : 'border-transparent text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <BookOpen className="w-3.5 h-3.5" /> Explanation & Evidence
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab('code')}
+              className={`py-2.5 px-3 text-xs font-semibold flex items-center gap-1.5 border-b-2 transition-all ${
+                activeTab === 'code'
+                  ? 'border-cyan-400 text-cyan-400'
+                  : 'border-transparent text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <FileCode className="w-3.5 h-3.5" /> Vulnerable Snippet
+            </button>
+            {hasDiff && (
+              <button
+                type="button"
+                onClick={() => setActiveTab('diff')}
+                className={`py-2.5 px-3 text-xs font-semibold flex items-center gap-1.5 border-b-2 transition-all ${
+                  activeTab === 'diff'
+                    ? 'border-emerald-400 text-emerald-400'
+                    : 'border-transparent text-slate-400 hover:text-slate-200'
                 }`}
               >
-                <div className="flex items-center gap-2 font-bold text-xs tracking-wider">
-                  <span>{f.fix_verified ? '✓ FIX VERIFIED' : '⚠ FIX NOT VERIFIED'}</span>
+                <GitCompare className="w-3.5 h-3.5" /> Synthesized Remediation Diff
+              </button>
+            )}
+          </div>
+
+          <div className="p-5 space-y-4">
+            {activeTab === 'explanation' && (
+              <div className="space-y-4 text-xs sm:text-sm">
+                <div>
+                  <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-1 flex items-center gap-1.5">
+                    <Sparkles className="w-3.5 h-3.5 text-cyan-400" /> Vulnerability Description
+                  </h4>
+                  <p className="text-slate-300 leading-relaxed font-sans">{f.description}</p>
                 </div>
-                <p className="text-xs mt-1 text-gray-300">
-                  {f.fix_verification_reason || (
-                    f.fix_verified
-                      ? 'Vulnerability resolved and no new High/Critical findings'
-                      : (f.fix_verified === false
-                          ? 'Target vulnerability still detected'
-                          : 'Verification unavailable')
-                  )}
-                </p>
-                <p className="text-[10px] text-gray-500 mt-1.5">
-                  Compiler verification: not performed (solc not available in runtime). Automated verification does not guarantee the contract is completely secure.
-                </p>
-              </div>
-            </div>
-          )}
 
-          <p className="text-[11px] text-gray-600 italic">
-            ⚠ Fix requires manual review. Do not deploy automatically generated code without audit.
-          </p>
-        </div>
-      </AccordionSection>
+                {f.attackScenario && (
+                  <div className="p-3.5 rounded-lg bg-red-950/20 border border-red-900/30">
+                    <h4 className="text-xs font-bold text-red-400 uppercase tracking-wider mb-1">
+                      Exploit & Attack Vector
+                    </h4>
+                    <p className="text-slate-300 font-sans leading-relaxed text-xs">
+                      {f.attackScenario}
+                    </p>
+                  </div>
+                )}
 
-      {/* Phase 9: Before / After diff */}
-      {hasBeforeAfter && (
-        <AccordionSection title="Before / After — Vulnerable vs. Fixed" icon="↔">
-          <DiffViewer
-            original={f.original_code}
-            fixed={f.fixed_code}
-            label="Vulnerable code → Suggested fix"
-          />
-          <p className="text-[11px] text-gray-600 italic mt-2">
-            Red lines show the vulnerable code. Green lines show the suggested replacement. Fix requires manual review.
-          </p>
-        </AccordionSection>
-      )}
-    </div>
-  );
-}
+                {f.staticEvidence && (
+                  <div className="p-3.5 rounded-lg bg-slate-900/80 border border-slate-800">
+                    <h4 className="text-xs font-bold text-cyan-400 uppercase tracking-wider mb-1 font-mono">
+                      Static AST Evidence
+                    </h4>
+                    <p className="text-slate-400 font-mono text-xs leading-relaxed">
+                      {f.staticEvidence}
+                    </p>
+                  </div>
+                )}
 
-// ─────────────────────────────────────────── Safe Contract Banner ──
-function SafeBanner({ report }: { report: VulnerabilityReport }) {
-  return (
-    <div className="bg-gray-900 border border-green-500/20 rounded-xl p-8 text-center shadow-lg">
-      <div className="text-green-500 text-5xl mb-4">✓</div>
-      <h2 className="text-2xl font-extrabold text-white mb-2">No Vulnerabilities Detected</h2>
-      <p className="text-gray-400 text-sm mb-6 max-w-md mx-auto">
-        Your contract did not trigger any of the known vulnerability checks. No issues were detected.
-      </p>
-      <div className="grid grid-cols-2 gap-3 max-w-xs mx-auto mb-4">
-        <div className="bg-gray-950 rounded-lg p-3 border border-gray-800">
-          <p className="text-gray-500 text-[10px] uppercase font-bold mb-1">Security Score</p>
-          <p className="text-white text-xl font-extrabold">{report.security_score ?? '—'} / 100</p>
-        </div>
-        <div className="bg-gray-950 rounded-lg p-3 border border-gray-800">
-          <p className="text-gray-500 text-[10px] uppercase font-bold mb-1">Risk Level</p>
-          <p className="text-green-400 text-lg font-extrabold">{report.risk_level ?? 'Safe'}</p>
-        </div>
-      </div>
-      <p className="text-gray-600 text-xs max-w-sm mx-auto">
-        No automated scanner can guarantee a contract is completely secure. Manual audit is always recommended for financial code.
-      </p>
-    </div>
-  );
-}
-
-// ─────────────────────────────────────────── Phase 3: Blockchain Audit Integrity ──
-interface BlockchainSectionProps {
-  report: VulnerabilityReport;
-  analysisId: string;
-}
-
-function BlockchainSection({ report, analysisId }: BlockchainSectionProps) {
-  const [registering, setRegistering] = useState(false);
-  const [verifying, setVerifying] = useState(false);
-  const [registerResult, setRegisterResult] = useState<any>(null);
-  const [verifyResult, setVerifyResult] = useState<any>(null);
-  const [showDetails, setShowDetails] = useState(false);
-
-  const isRegistered = report.on_chain_status === 'registered';
-
-  const handleRegister = async () => {
-    setRegistering(true);
-    setRegisterResult(null);
-    try {
-      const res = await api.post(`/api/analysis/${analysisId}/register-on-chain`);
-      setRegisterResult(res.data);
-    } catch (err: any) {
-      setRegisterResult({ error: err.response?.data?.detail || 'Registration failed' });
-    } finally {
-      setRegistering(false);
-    }
-  };
-
-  const handleVerify = async () => {
-    setVerifying(true);
-    setVerifyResult(null);
-    try {
-      const res = await api.get(`/api/analysis/${analysisId}/verify-on-chain`);
-      setVerifyResult(res.data);
-    } catch (err: any) {
-      setVerifyResult({ error: err.response?.data?.detail || 'Verification failed' });
-    } finally {
-      setVerifying(false);
-    }
-  };
-
-  if (!isRegistered && !registerResult) {
-    // Show registration option
-    return (
-      <div className="bg-gray-900 border border-gray-800 rounded-xl p-5 mb-6">
-        <div className="flex items-center justify-between mb-4">
-          <div className="flex items-center gap-2">
-            <span className="text-blue-400 text-lg">⛓</span>
-            <h3 className="text-sm font-bold text-white">Blockchain Audit Registry</h3>
-          </div>
-          <span className="text-[10px] text-gray-500 bg-gray-800 px-2 py-0.5 rounded">Optional</span>
-        </div>
-        <p className="text-gray-400 text-xs mb-4 leading-relaxed">
-          Register this audit's integrity hashes on-chain for verifiable provenance. This does NOT prove the security analysis is correct — only that these specific hashes were recorded.
-        </p>
-        <button
-          onClick={handleRegister}
-          disabled={registering}
-          className="text-xs px-4 py-2 rounded bg-blue-600/20 hover:bg-blue-600/30 text-blue-400 border border-blue-500/30 disabled:opacity-50 transition-colors flex items-center gap-2"
-        >
-          {registering && <span className="w-3 h-3 border-2 border-blue-400 border-t-transparent rounded-full animate-spin" />}
-          {registering ? 'Registering...' : 'Register on Blockchain'}
-        </button>
-        {registerResult && (
-          <div className={`mt-3 rounded-lg border p-3 ${
-            registerResult.registered
-              ? 'bg-green-950/20 border-green-500/30 text-green-300'
-              : 'bg-gray-800 border-gray-700 text-gray-400'
-          }`}>
-            <p className="text-xs font-semibold mb-1">
-              {registerResult.registered ? '✓ Registered' : 'Registration Unavailable'}
-            </p>
-            <p className="text-[10px]">{registerResult.message}</p>
-          </div>
-        )}
-      </div>
-    );
-  }
-
-  // Show registered status
-  return (
-    <div className="bg-gray-900 border border-gray-800 rounded-xl p-5 mb-6">
-      <div className="flex items-center justify-between mb-4">
-        <div className="flex items-center gap-2">
-          <span className="text-green-400 text-lg">⛓</span>
-          <h3 className="text-sm font-bold text-white">Blockchain Audit Registry</h3>
-        </div>
-        {isRegistered && (
-          <span className="text-[10px] text-green-400 bg-green-500/10 border border-green-500/30 px-2 py-0.5 rounded-full">
-            ✓ Registered
-          </span>
-        )}
-      </div>
-
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4">
-        <div className="bg-gray-950/60 rounded-lg border border-gray-800 p-3">
-          <p className="text-[10px] text-gray-500 uppercase font-bold mb-1">Audit ID</p>
-          <p className="text-gray-300 text-xs font-mono break-all">{report.audit_id || '—'}</p>
-        </div>
-        <div className="bg-gray-950/60 rounded-lg border border-gray-800 p-3">
-          <p className="text-[10px] text-gray-500 uppercase font-bold mb-1">Transaction Hash</p>
-          <p className="text-gray-300 text-xs font-mono break-all">{report.tx_hash || '—'}</p>
-        </div>
-        <div className="bg-gray-950/60 rounded-lg border border-gray-800 p-3">
-          <p className="text-[10px] text-gray-500 uppercase font-bold mb-1">Registry Address</p>
-          <p className="text-gray-300 text-xs font-mono break-all">{report.registry_address || '—'}</p>
-        </div>
-        <div className="bg-gray-950/60 rounded-lg border border-gray-800 p-3">
-          <p className="text-[10px] text-gray-500 uppercase font-bold mb-1">Chain ID</p>
-          <p className="text-gray-300 text-xs font-mono">{report.chain_id || '—'}</p>
-        </div>
-      </div>
-
-      <div className="flex flex-wrap gap-2 mb-4">
-        <button
-          onClick={handleVerify}
-          disabled={verifying}
-          className="text-xs px-3 py-1.5 rounded bg-purple-600/20 hover:bg-purple-600/30 text-purple-400 border border-purple-500/30 disabled:opacity-50 transition-colors flex items-center gap-1.5"
-        >
-          {verifying && <span className="w-2.5 h-2.5 border-2 border-purple-400 border-t-transparent rounded-full animate-spin" />}
-          {verifying ? 'Verifying...' : 'Verify Integrity'}
-        </button>
-        <button
-          onClick={() => setShowDetails(!showDetails)}
-          className="text-xs px-3 py-1.5 rounded bg-gray-800 hover:bg-gray-700 text-gray-400 border border-gray-700 transition-colors"
-        >
-          {showDetails ? 'Hide Details' : 'Show Details'}
-        </button>
-      </div>
-
-      {verifyResult && (
-        <div className={`mb-3 rounded-lg border p-3 ${
-          verifyResult.verified
-            ? 'bg-green-950/20 border-green-500/30 text-green-300'
-            : 'bg-amber-950/20 border-amber-500/30 text-amber-300'
-        }`}>
-          <p className="text-xs font-semibold mb-1">
-            {verifyResult.verified ? '✓ Integrity Verified' : '⚠ Integrity Check Failed'}
-          </p>
-          <p className="text-[10px]">{verifyResult.message}</p>
-        </div>
-      )}
-
-      {showDetails && (
-        <div className="border-t border-gray-800 pt-4 mt-4 space-y-3">
-          <p className="text-[11px] text-gray-500 italic leading-relaxed">
-            Blockchain registration proves that these hashes were recorded on-chain and can be checked later. It does NOT prove that the security analysis itself is correct.
-          </p>
-          <div className="grid grid-cols-1 gap-2">
-            <div className="bg-gray-950/40 rounded border border-gray-800 p-2">
-              <p className="text-[10px] text-gray-600 uppercase font-bold mb-0.5">Source Hash (Local)</p>
-              <p className="text-gray-400 text-[10px] font-mono break-all">{report.source_hash || '—'}</p>
-            </div>
-            <div className="bg-gray-950/40 rounded border border-gray-800 p-2">
-              <p className="text-[10px] text-gray-600 uppercase font-bold mb-0.5">Report Hash (Local)</p>
-              <p className="text-gray-400 text-[10px] font-mono break-all">{report.report_hash || '—'}</p>
-            </div>
-            {verifyResult && verifyResult.on_chain_contract_hash && (
-              <div className="bg-gray-950/40 rounded border border-gray-800 p-2">
-                <p className="text-[10px] text-gray-600 uppercase font-bold mb-0.5">Source Hash (On-Chain)</p>
-                <p className="text-gray-400 text-[10px] font-mono break-all">{verifyResult.on_chain_contract_hash}</p>
+                {f.recommendation && (
+                  <div className="p-3.5 rounded-lg bg-emerald-950/20 border border-emerald-900/30">
+                    <h4 className="text-xs font-bold text-emerald-400 uppercase tracking-wider mb-1 flex items-center gap-1.5">
+                      <CheckCircle className="w-3.5 h-3.5" /> Mitigation Recommendation
+                    </h4>
+                    <p className="text-slate-300 font-sans leading-relaxed text-xs">
+                      {f.recommendation}
+                    </p>
+                  </div>
+                )}
               </div>
             )}
-            {verifyResult && verifyResult.on_chain_report_hash && (
-              <div className="bg-gray-950/40 rounded border border-gray-800 p-2">
-                <p className="text-[10px] text-gray-600 uppercase font-bold mb-0.5">Report Hash (On-Chain)</p>
-                <p className="text-gray-400 text-[10px] font-mono break-all">{verifyResult.on_chain_report_hash}</p>
+
+            {activeTab === 'code' && (
+              <div className="space-y-2">
+                <div className="flex items-center justify-between text-xs text-slate-400 font-mono">
+                  <span>Line {f.line} • Isolated Scope Context</span>
+                </div>
+                <Suspense
+                  fallback={
+                    <div className="h-40 flex items-center justify-center text-xs text-slate-500 font-mono">
+                      Loading code viewer...
+                    </div>
+                  }
+                >
+                  <CodeViewer code={f.codeSnippet} language="solidity" highlightLines={[f.line]} />
+                </Suspense>
+              </div>
+            )}
+
+            {activeTab === 'diff' && hasDiff && (
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs text-slate-400 font-mono">
+                    LLM-generated patch verified against SWC mitigation rules
+                  </span>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={copyPatch}
+                    className="text-xs h-7 px-2.5 gap-1.5 text-slate-300 border-slate-700 bg-slate-900 hover:bg-slate-800"
+                  >
+                    {copiedPatch ? (
+                      <>
+                        <Check className="w-3 h-3 text-emerald-400" />
+                        <span className="text-emerald-400">Copied</span>
+                      </>
+                    ) : (
+                      <>
+                        <Copy className="w-3 h-3" />
+                        <span>Copy Patch</span>
+                      </>
+                    )}
+                  </Button>
+                </div>
+                <DiffViewer
+                  original={f.codeSnippet}
+                  fixed={f.fixed_code!}
+                  label="Vulnerable AST Scope vs Remediated Contract Code"
+                />
               </div>
             )}
           </div>
         </div>
       )}
-    </div>
+    </Card>
   );
 }
 
-// ─────────────────────────────────────────── Main Page ──
 export default function ReportPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+
   const [report, setReport] = useState<VulnerabilityReport | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [pollCount, setPollCount] = useState(0);
-  const [selectedFindingId, setSelectedFindingId] = useState<string | null>(null);
 
-  // Read persisted mode from sessionStorage
-  const mode = (id ? sessionStorage.getItem(`smai_mode_${id}`) : null) ?? '';
+  // Filters and search state
+  const [searchQuery, setSearchQuery] = useState('');
+  const [selectedSeverity, setSelectedSeverity] = useState<string>('ALL');
 
   useEffect(() => {
     if (!id) return;
     let timer: number;
+
     const fetchReport = async () => {
       try {
         const r = await api.get(`/api/analysis/${id}`);
         if (r.data.status === 'PENDING') {
-          timer = window.setTimeout(() => setPollCount(p => p + 1), 2000);
+          timer = window.setTimeout(() => setPollCount((p) => p + 1), 1500);
         } else if (r.data.status === 'FAILED') {
-          setError('Analysis failed during execution.');
+          setError('Contract analysis failed during background execution.');
           setLoading(false);
         } else {
           setReport(r.data);
           setLoading(false);
         }
       } catch {
-        setError('Backend connection unavailable. Make sure the SMAI backend is running and try again.');
+        setError('Report not found or your user role is not authorized to view it.');
         setLoading(false);
       }
     };
@@ -1025,164 +328,359 @@ export default function ReportPage() {
     return () => clearTimeout(timer);
   }, [id, pollCount]);
 
-  const handleSelectFinding = useCallback((findingId: string | null) => {
-    setSelectedFindingId(prev => (prev === findingId ? null : findingId));
-    if (findingId) {
-      setTimeout(() => {
-        document.getElementById(`finding-${findingId}`)?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-      }, 50);
-    }
-  }, []);
+  // Export handlers
+  const handleExportJSON = () => {
+    if (!report) return;
+    const blob = new Blob([JSON.stringify(report, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${report.contract_name.replace(/\s+/g, '_')}_audit_report.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
 
-  // ── Loading ──
-  if (loading) return (
-    <div className="min-h-screen bg-gray-950 flex flex-col font-sans">
-      <Navbar />
-      <div className="flex-1 flex flex-col items-center justify-center gap-4 text-gray-400">
-        <div className="w-10 h-10 border-4 border-gray-700 border-t-blue-500 rounded-full animate-spin" />
-        <h2 className="text-xl font-bold text-white">Analyzing your contract…</h2>
-        <p className="text-sm text-gray-500">SMAI is performing static analysis and AI verification.</p>
-      </div>
-    </div>
-  );
+  const handleExportMarkdown = () => {
+    if (!report) return;
+    const sec = calculateSecurityScore(report.severity_counts);
+    let md = `# Smart Contract Security Audit Report: ${report.contract_name}\n\n`;
+    md += `**Date:** ${new Date(report.timestamp).toLocaleString()}\n`;
+    md += `**Security Score:** ${sec.score}/100 (Grade: ${sec.grade})\n`;
+    md += `**Total Findings:** ${report.total_findings}\n\n`;
+    md += `## Executive Summary\n\n${report.summary}\n\n`;
+    md += `## Severity Breakdown\n\n`;
+    Object.entries(report.severity_counts || {}).forEach(([k, v]) => {
+      md += `- **${k}:** ${v}\n`;
+    });
+    md += `\n## Verified Findings\n\n`;
 
-  // ── Error ──
-  if (error || !report) return (
-    <div className="min-h-screen bg-gray-950 flex flex-col font-sans">
-      <Navbar />
-      <div className="max-w-2xl mx-auto px-6 py-16 text-center flex-1 flex flex-col justify-center">
-        <h2 className="text-xl font-bold text-white mb-3">Connection Error</h2>
-        <p className="text-gray-400 mb-8 text-sm">{error || 'Report data unavailable.'}</p>
-        <button onClick={() => navigate('/scan')} className="bg-gray-800 hover:bg-gray-700 text-white px-6 py-2 rounded-lg mx-auto">
-          ← Back to Scanner
-        </button>
-      </div>
-    </div>
-  );
+    report.findings.forEach((f, idx) => {
+      md += `### ${idx + 1}. [${f.severity}] ${f.title || f.type}\n\n`;
+      md += `- **SWC/CWE:** ${f.swcId || 'N/A'} / ${f.cweId || 'N/A'}\n`;
+      md += `- **Location:** Line ${f.line} in function \`${f.function}\`\n`;
+      md += `- **Confidence:** ${(f.confidence * 100).toFixed(0)}%\n\n`;
+      md += `**Description:**\n${f.description}\n\n`;
+      if (f.attackScenario) {
+        md += `**Attack Scenario:**\n${f.attackScenario}\n\n`;
+      }
+      if (f.recommendation) {
+        md += `**Mitigation:**\n${f.recommendation}\n\n`;
+      }
+      if (f.fixed_code) {
+        md += `**Remediation Patch:**\n\`\`\`solidity\n${f.fixed_code}\n\`\`\`\n\n`;
+      }
+    });
 
-  const isSafe = report.findings.length === 0;
-  const confirmedCount = report.findings.filter(f => f.verification_status === 'CONFIRMED').length;
-  const rejectedCount = report.findings.filter(f => f.verification_status === 'REJECTED').length;
-  const unverifiedCount = report.findings.filter(f => f.verification_status === 'UNVERIFIED' || !f.verification_status).length;
-  const hasSource = Boolean(report.source_code);
+    const blob = new Blob([md], { type: 'text/markdown' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${report.contract_name.replace(/\s+/g, '_')}_audit_report.md`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const handlePrint = () => {
+    window.print();
+  };
+
+  // Filtered findings
+  const filteredFindings = useMemo(() => {
+    if (!report?.findings) return [];
+    return report.findings.filter((f) => {
+      const matchesSev = selectedSeverity === 'ALL' || f.severity === selectedSeverity;
+      const q = searchQuery.toLowerCase().trim();
+      const matchesQuery =
+        !q ||
+        f.title?.toLowerCase().includes(q) ||
+        f.type?.toLowerCase().includes(q) ||
+        f.function?.toLowerCase().includes(q) ||
+        f.swcId?.toLowerCase().includes(q) ||
+        f.description?.toLowerCase().includes(q);
+      return matchesSev && matchesQuery;
+    });
+  }, [report, selectedSeverity, searchQuery]);
+
+  if (loading) {
+    return (
+      <AppLayout title="Audit Progress" subtitle="Multi-Agent Pipeline Active">
+        <div className="flex flex-col items-center justify-center py-20 text-center space-y-4">
+          <div className="w-12 h-12 border-3 border-cyan-500/20 border-t-cyan-500 rounded-full animate-spin" />
+          <h2 className="text-xl font-bold text-white">Analyzing Smart Contract...</h2>
+          <p className="text-xs text-slate-400 max-w-md font-sans">
+            The multi-agent pipeline is executing static AST analysis, RAG mitigation matching, and local LLM verification.
+          </p>
+        </div>
+      </AppLayout>
+    );
+  }
+
+  if (error || !report) {
+    return (
+      <AppLayout title="Audit Report" subtitle="Error Loading Report">
+        <div className="max-w-xl mx-auto py-16 text-center space-y-4">
+          <Alert className="bg-red-950/40 border-red-800/60 text-red-300 text-left">
+            <ShieldAlert className="w-5 h-5 text-red-400" />
+            <AlertDescription className="text-xs ml-2">{error || 'Report unavailable.'}</AlertDescription>
+          </Alert>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => navigate('/history')}
+            className="text-xs text-slate-300 border-slate-700"
+          >
+            <ArrowLeft className="w-3.5 h-3.5 mr-1.5" /> Return to History
+          </Button>
+        </div>
+      </AppLayout>
+    );
+  }
+
+  const secScore = calculateSecurityScore(report.severity_counts);
+  const totalFindings = report.total_findings;
 
   return (
-    <div className="min-h-screen bg-gray-950 font-sans pb-20 overflow-x-hidden">
-      <Navbar />
-      <div className="max-w-7xl mx-auto px-4 md:px-6 py-6 w-full">
-
-        {/* Back nav */}
-        <button onClick={() => navigate('/scan')} className="text-gray-500 hover:text-gray-300 text-sm mb-5 flex items-center gap-2">
-          ← Back to Scanner
-        </button>
-
-        {/* Phase 1: Professional header */}
-        <ReportHeader
-          report={report}
-          mode={mode}
-          confirmedCount={confirmedCount}
-          rejectedCount={rejectedCount}
-          unverifiedCount={unverifiedCount}
-        />
-
-        {/* Unverified warning banner (issue 3) */}
-        {!isSafe && unverifiedCount > 0 && confirmedCount === 0 && rejectedCount === 0 && (
-          <div className="mb-6 flex items-start gap-3 bg-amber-950/30 border border-amber-500/30 rounded-xl px-5 py-4">
-            <span className="text-amber-400 text-lg flex-shrink-0">⚠</span>
-            <div>
-              <p className="text-amber-400 font-bold text-sm">Verification Incomplete</p>
-              <p className="text-amber-200/70 text-sm mt-0.5 leading-relaxed">
-                Static analysis detected findings, but AI verification was not completed. Manual security review is recommended.
-              </p>
-            </div>
-          </div>
-        )}
-        {!isSafe && unverifiedCount > 0 && (confirmedCount > 0 || rejectedCount > 0) && (
-          <div className="mb-6 flex items-start gap-3 bg-amber-950/20 border border-amber-500/20 rounded-xl px-5 py-3">
-            <span className="text-amber-400 text-sm flex-shrink-0 mt-0.5">⚠</span>
-            <p className="text-amber-200/60 text-sm leading-relaxed">
-              {unverifiedCount} finding{unverifiedCount !== 1 ? 's' : ''} could not be AI-verified. Manual review is recommended for unverified items.
-            </p>
-          </div>
-        )}
-
-        {/* Safe banner */}
-        {isSafe && <SafeBanner report={report} />}
-
-        {/* Phase 3: Blockchain Audit Integrity section */}
-        <BlockchainSection report={report} analysisId={report.analysis_id} />
-
-        {/* Phase 4: Two-column layout */}
-        {!isSafe && (
-          <>
-            {/* Mobile: source viewer above findings */}
-            {hasSource && (
-              <div className="lg:hidden mb-6 min-w-0">
-                <SourceCodePanel
-                  source={report.source_code!}
-                  findings={report.findings}
-                  selectedFindingId={selectedFindingId}
-                  onSelectFinding={setSelectedFindingId}
-                />
-              </div>
-            )}
-
-            {/* Desktop: two-column grid */}
-            <div
-              className="lg:grid lg:gap-6 w-full"
-              style={{ gridTemplateColumns: hasSource ? 'minmax(0,1fr) minmax(0,420px)' : '1fr' }}
+    <AppLayout
+      title={`Audit: ${report.contract_name}`}
+      subtitle={`Completed on ${new Date(report.timestamp).toLocaleString()} • ID: ${report.analysis_id}`}
+    >
+      <div className="space-y-6">
+        {/* Top Header & Actions Bar */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-2 border-b border-slate-800/60">
+          <div className="flex items-center gap-3">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => navigate('/history')}
+              className="text-slate-400 hover:text-cyan-400 text-xs px-2 h-8 gap-1.5 bg-slate-900/60 border border-slate-800"
             >
-              {/* LEFT: Findings — min-w-0 prevents overflow */}
-              <div className="min-w-0">
-                <div className="flex items-center justify-between mb-4">
-                  <h2 className="text-lg font-bold text-white">Vulnerability Findings</h2>
-                  <span className="text-gray-500 text-sm">{report.findings.length} total</span>
-                </div>
+              <ArrowLeft className="w-3.5 h-3.5" /> History
+            </Button>
+            <div className="flex items-center gap-2">
+              <span
+                className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-bold border tracking-wide ${
+                  report.is_vulnerable
+                    ? 'bg-red-500/10 text-red-400 border-red-500/40'
+                    : 'bg-emerald-500/10 text-emerald-400 border-emerald-500/40'
+                }`}
+              >
+                {report.is_vulnerable ? (
+                  <>
+                    <ShieldAlert className="w-3.5 h-3.5 text-red-500" /> VULNERABLE
+                  </>
+                ) : (
+                  <>
+                    <ShieldCheck className="w-3.5 h-3.5 text-emerald-500" /> AUDIT PASSED
+                  </>
+                )}
+              </span>
 
-                {report.findings.map((f, idx) => (
-                  <FindingCard
-                    key={f.finding_id}
-                    f={f}
-                    index={idx}
-                    isActive={selectedFindingId === f.finding_id}
-                    onSelect={() => handleSelectFinding(f.finding_id)}
-                    analysisId={report.analysis_id}
-                    onUpdateFinding={(updated) => {
-                      setReport(prev => {
-                        if (!prev) return prev;
-                        return {
-                          ...prev,
-                          findings: prev.findings.map(item => item.finding_id === updated.finding_id ? updated : item)
-                        };
-                      });
-                    }}
-                  />
-                ))}
-              </div>
+              {report.mode && (
+                <span className="text-[11px] font-mono px-2.5 py-1 rounded-lg bg-cyan-950/60 text-cyan-300 border border-cyan-800/60 font-semibold">
+                  Mode {report.mode}: {report.mode === 'A' ? 'Static AST' : report.mode === 'B' ? 'Direct LLM' : 'Full Hybrid RAG'}
+                </span>
+              )}
 
-              {/* RIGHT: Source viewer (desktop only, sticky) */}
-              {hasSource && (
-                <div className="hidden lg:block min-w-0">
-                  <div className="sticky top-4">
-                    <SourceCodePanel
-                      source={report.source_code!}
-                      findings={report.findings}
-                      selectedFindingId={selectedFindingId}
-                      onSelectFinding={setSelectedFindingId}
-                    />
-                  </div>
-                </div>
+              {/* LLM vs AST Diagnostic Chips */}
+              <span className="text-[11px] font-mono px-2.5 py-1 rounded-lg bg-slate-900 text-slate-300 border border-slate-700 flex items-center gap-1.5 font-medium">
+                <Cpu className="w-3.5 h-3.5 text-cyan-400" />
+                Model: <span className="text-cyan-300 font-semibold">{report.model_used || 'qwen2.5-coder:1.5b'}</span>
+              </span>
+
+              {report.raw_findings_count !== undefined && (
+                <span className="text-[11px] font-mono px-2.5 py-1 rounded-lg bg-slate-900 text-slate-300 border border-slate-700 flex items-center gap-1 font-medium">
+                  AST Flagged: <span className="text-amber-300 font-semibold">{report.raw_findings_count}</span>
+                </span>
+              )}
+
+              {report.ai_rejected_count !== undefined && report.ai_rejected_count > 0 && (
+                <span className="text-[11px] font-mono px-2.5 py-1 rounded-lg bg-blue-950/70 text-blue-300 border border-blue-700/60 flex items-center gap-1 font-semibold">
+                  <ShieldCheck className="w-3.5 h-3.5 text-blue-400" />
+                  AI Filtered False Positives: +{report.ai_rejected_count}
+                </span>
               )}
             </div>
+          </div>
 
-            {!hasSource && (
-              <div className="mt-4 bg-gray-900 border border-gray-800 rounded-xl p-5 text-sm text-gray-500">
-                Source code viewer unavailable — re-scan the contract to enable line highlighting.
+          {/* Export Actions Suite */}
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleExportJSON}
+              className="text-xs h-8 px-3 gap-1.5 text-slate-300 border-slate-700 bg-slate-900/80 hover:bg-slate-800"
+            >
+              <Download className="w-3.5 h-3.5 text-cyan-400" />
+              <span>JSON</span>
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleExportMarkdown}
+              className="text-xs h-8 px-3 gap-1.5 text-slate-300 border-slate-700 bg-slate-900/80 hover:bg-slate-800"
+            >
+              <FileText className="w-3.5 h-3.5 text-purple-400" />
+              <span>Markdown</span>
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handlePrint}
+              className="text-xs h-8 px-3 gap-1.5 text-slate-300 border-slate-700 bg-slate-900/80 hover:bg-slate-800 hidden sm:inline-flex"
+            >
+              <Printer className="w-3.5 h-3.5 text-slate-400" />
+              <span>Print</span>
+            </Button>
+          </div>
+        </div>
+
+        {/* Security Score & Summary Cards Grid */}
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+          {/* Security Score Radial Card */}
+          <Card className="bg-[#0b1120]/90 border-slate-800/80 p-5 flex flex-col justify-between shadow-lg">
+            <div className="flex items-center justify-between text-xs font-semibold text-slate-400">
+              <span>Security Score</span>
+              <span className="font-mono text-[10px] text-slate-500">EVM Spec</span>
+            </div>
+            <div className="my-4 flex items-center justify-center gap-4">
+              <div
+                className="w-20 h-20 rounded-full border-4 flex flex-col items-center justify-center shadow-inner"
+                style={{ borderColor: secScore.color }}
+              >
+                <span className="text-2xl font-extrabold text-white font-mono">
+                  {secScore.score}
+                </span>
+                <span className="text-[10px] font-mono text-slate-400">/100</span>
               </div>
-            )}
-          </>
+              <div className="flex flex-col">
+                <span
+                  className="text-2xl font-black font-mono"
+                  style={{ color: secScore.color }}
+                >
+                  Grade {secScore.grade}
+                </span>
+                <span className="text-xs text-slate-400">{secScore.label}</span>
+              </div>
+            </div>
+            <div className="text-[10px] text-slate-400 font-mono text-center">
+              Deductions calculated from SWC severity weightings
+            </div>
+          </Card>
+
+          {/* Executive Summary Card (Spans 3 cols) */}
+          <Card className="md:col-span-3 bg-[#0b1120]/90 border-slate-800/80 shadow-lg flex flex-col justify-between">
+            <CardHeader className="py-3 px-5 border-b border-slate-800/60">
+              <CardTitle className="text-xs font-semibold text-slate-200 flex items-center gap-2">
+                <FileCode className="w-4 h-4 text-cyan-400" />
+                Executive Audit Findings Summary
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="p-5 space-y-3">
+              <p className="text-xs sm:text-sm text-slate-300 leading-relaxed font-sans">
+                {report.summary}
+              </p>
+              {totalFindings > 0 && (
+                <div className="pt-2">
+                  <RiskBar counts={report.severity_counts} total={totalFindings} />
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </div>
+
+        {/* Findings Filter & Search Bar */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3 rounded-xl bg-slate-900/50 border border-slate-800/80">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-xs text-slate-400 font-medium flex items-center gap-1.5 mr-1">
+              <Filter className="w-3.5 h-3.5 text-cyan-400" /> Severity:
+            </span>
+            <button
+              onClick={() => setSelectedSeverity('ALL')}
+              className={`px-2.5 py-1 rounded-lg text-xs font-mono transition-all ${
+                selectedSeverity === 'ALL'
+                  ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 font-semibold'
+                  : 'text-slate-400 hover:text-slate-200 bg-slate-800/40'
+              }`}
+            >
+              All ({totalFindings})
+            </button>
+            {SEVERITIES.map((s) => {
+              const count = report.severity_counts[s] ?? 0;
+              if (count === 0) return null;
+              const isSelected = selectedSeverity === s;
+              return (
+                <button
+                  key={s}
+                  onClick={() => setSelectedSeverity(s)}
+                  className={`px-2.5 py-1 rounded-lg text-xs font-mono transition-all ${
+                    isSelected
+                      ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 font-semibold'
+                      : 'text-slate-400 hover:text-slate-200 bg-slate-800/40'
+                  }`}
+                >
+                  {s} ({count})
+                </button>
+              );
+            })}
+          </div>
+
+          <div className="relative min-w-[220px]">
+            <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2.5" />
+            <Input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Filter findings by text or SWC..."
+              className="h-8 pl-8 text-xs bg-slate-900 border-slate-700 text-slate-100 placeholder:text-slate-500 font-mono"
+            />
+          </div>
+        </div>
+
+        {/* Findings List */}
+        {filteredFindings.length === 0 ? (
+          <Card className="bg-[#0b1120]/80 border-slate-800 text-center p-12 shadow-xl">
+            <div className="w-14 h-14 rounded-2xl bg-emerald-950/60 border border-emerald-500/40 flex items-center justify-center text-emerald-400 mx-auto mb-4 shadow-lg shadow-emerald-950/50">
+              <ShieldCheck className="w-7 h-7" />
+            </div>
+            <h2 className="text-lg font-bold text-white">
+              {totalFindings === 0 ? 'No Vulnerabilities Detected' : 'No Matching Findings'}
+            </h2>
+            <p className="text-xs text-slate-400 mt-2 max-w-md mx-auto">
+              {totalFindings === 0
+                ? 'Deterministic AST parsers and the LLM reasoner verified zero attack surface in the supplied code.'
+                : 'Try adjusting your search query or severity filter.'}
+            </p>
+          </Card>
+        ) : (
+          <div className="space-y-3.5">
+            {filteredFindings.map((f, i) => (
+              <FindingCard key={f.finding_id} f={f} idx={i} />
+            ))}
+          </div>
+        )}
+
+        {/* AI Filtered False Positives Section */}
+        {report.suppressed_findings && report.suppressed_findings.length > 0 && (
+          <div className="pt-6 border-t border-slate-800/80 space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <ShieldCheck className="w-4 h-4 text-blue-400" />
+                <h3 className="text-sm font-bold text-slate-200">
+                  AI Filtered False Positives ({report.suppressed_findings.length})
+                </h3>
+              </div>
+              <span className="text-[11px] font-mono text-slate-400">
+                Candidates flagged by AST static heuristics but safely rejected by LLM reasoning
+              </span>
+            </div>
+            <div className="space-y-3">
+              {report.suppressed_findings.map((f, i) => (
+                <FindingCard key={`suppressed-${f.finding_id || i}`} f={f} idx={i} isSuppressed={true} />
+              ))}
+            </div>
+          </div>
         )}
       </div>
-    </div>
+    </AppLayout>
   );
 }

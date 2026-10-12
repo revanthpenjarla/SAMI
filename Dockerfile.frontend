@@ -1,4 +1,4 @@
-# Stage 1: Build React App with Node.js
+# Stage 1: Build React App with Bun
 FROM oven/bun:alpine AS builder
 WORKDIR /app
 COPY frontend/package*.json ./
